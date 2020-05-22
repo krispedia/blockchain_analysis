@@ -121,7 +121,7 @@ class bitcoinAbuseCrawler:
             self.reportdb.insertOne(infor)
 
 if __name__=="__main__":
-    API_KEY = 'vyOShxZAsrN707CfiaUeR80laaxhcdT2UeZX9j0QPl2qy7BLw0oCsCRZx8Nw'
+    API_KEY = ''
 
     c = bitcoinAbuseCrawler()
     c.setApiKey(API_KEY)
