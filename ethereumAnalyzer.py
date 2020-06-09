@@ -291,10 +291,11 @@ class ethereumAnalyzer:
                     infor['type'] = each.findAll('td')[3].text.strip()
                     if each.findAll('td')[4].text.strip().startswith('0x'): infor['fromAddress'] = each.findAll('td')[4].text.strip()
                     else: 
+                        #print(each.findAll('td')[4])
                         try:
                             infor['fromAddress'] = each.findAll('td')[4].find('a')['data-original-title'].split('(')[1].replace(')','').strip()
                         except:
-                            infor['fromAddress'] = each.findAll('td')[5].find('span')['data-original-title'].split('(')[1].replace(')','').strip()
+                            infor['fromAddress'] = each.findAll('td')[4].find('span')['data-original-title'].split('(')[1].replace(')','').strip()
                         infor['fromAddress_tag'] = each.findAll('td')[4].text.strip()
                     if each.findAll('td')[6].text.strip().startswith('0x'): infor['toAddress'] = each.findAll('td')[6].text.strip()
                     else:
@@ -316,7 +317,7 @@ class ethereumAnalyzer:
                     if each.findAll('td')[5].text.strip().startswith('0x'): infor['fromAddress'] = each.findAll('td')[5].text.strip()
                     # address_tag 있는 경우
                     else: 
-                        #print(each.findAll('td')[5].text)
+                        #print(each.findAll('td')[5])
                         try:
                             infor['fromAddress'] = each.findAll('td')[5].find('a')['data-original-title'].split('(')[1].replace(')','').strip()
                         except:
@@ -330,7 +331,7 @@ class ethereumAnalyzer:
                         infor['toAddress_tag'] = each.findAll('td')[7].text.strip()
                     if each.findAll('td')[5].find('i'): infor['fromContract'] = True
                     if each.findAll('td')[7].find('i'): infor['toContract'] = True
-                    # 정상 거래 완려된 경우
+                    # 정상 거래 완료된 경우
                     try:
                         infor['value_ETH'] = float(each.findAll('td')[8].text.replace('Ether','').replace(',','').rstrip())
                     except:
@@ -415,7 +416,7 @@ if __name__=="__main__":
     txid = '0x63c79e9c38835d75ecfe7d44c85b9f15be3d1bab073374dfbd177347dcd46b4a'
     addr = '0xabbb6bebfa05aa13e908eaa492bd7a8343760477'
     targetTime = datetime.datetime(2019,6,4,0,0,0)
-    termDays = 10
+    termDays = 5
     contractAddr = '0xfd9785b1148c6550e065a189d702560c67950d54'
     APIKEY = 'freekey'
 
