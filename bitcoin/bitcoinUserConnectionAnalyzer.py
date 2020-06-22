@@ -34,6 +34,7 @@ class bitcoinUserConnectionAnalyzer:
         self.dbName = None
         self.keyField = None
         self.proxies = self.setProxy()
+        self.chaindb = None
         
     def setDBName(self, dbName):
         """
@@ -68,6 +69,18 @@ class bitcoinUserConnectionAnalyzer:
         db.setKeyField(self.keyField) 
         
         return db
+    
+    def setChainDB(self, rootUserID):
+        """
+        | userID 기반 chain DB 설정
+        |
+        """
+        collectionName = 'bitcoin_analysischain_'+rootUserID
+        self.chaindb = mongoDB.MongoConnector(self.dbName, collectionName)
+        self.chaindb.connect()
+        self.chaindb.setKeyField('chainID') 
+        
+        return self.chaindb
         
     def setProxy(self):
         """
@@ -88,11 +101,11 @@ class bitcoinUserConnectionAnalyzer:
 
         # 페이지를 정상적으로 가져오지 않았다면
         if req.status_code != 200:
+            count = 0
             # 페이지 정상적으로 가져올 때 까지 proxy 변경
             while(req.status_code != 200):
                 self.proxies = self.setProxy()
                 req = requests.get(url, proxies=self.proxies)
-
         return BeautifulSoup(req.text, 'html.parser')
     
     def getCurPage(self, userID):
@@ -111,7 +124,9 @@ class bitcoinUserConnectionAnalyzer:
         
         # db에 데이터가 있는 경우
         if db.collection.count_documents({}) != 0:
-            curPage =  int(db.collection.count_documents({})/100) +1
+            lastTimeInDB = db.find().sort('time',1)[0]['time']
+            curPage = self.getStartPageOfUserID(userID, lastTimeInDB)
+            
         # db에 데이터 없는 경우
         else:
             curPage = 1
@@ -154,7 +169,14 @@ class bitcoinUserConnectionAnalyzer:
         
         db = self.setUserTxDB(userID)
         
-        for page in range(self.getCurPage(userID), self.getLastPage(userID)+1):
+        startPage = self.getStartPageOfUserID(userID, toTime)
+        endPage = self.getStartPageOfUserID(userID, fromTime)
+        curPage = self.getCurPage(userID)
+        
+        if curPage > startPage:
+            startPage = curPage
+        
+        for page in range(startPage, endPage+1):
             url = f'https://www.walletexplorer.com/wallet/{userID}?page={page}'
             print('[ * ] req -> ', url)
             soup = self.getSoup(url)
@@ -278,6 +300,7 @@ class bitcoinUserConnectionAnalyzer:
         """
         url = 'https://www.walletexplorer.com/txid/' + txid
         soup = self.getSoup(url)
+        print('[ * ] txInfo req -> ', url)
         #print(soup)
 
         info_continer = soup.find('table', {'class': 'info'}).findAll('tr')
@@ -304,7 +327,7 @@ class bitcoinUserConnectionAnalyzer:
         # 일반적인 거래 transaction인 경우 info_container에 txid/ included in block/ time/ sender/ fee/ size 정보 있음.
         if len(info_continer) == 6:
             if info_continer[3].find('td').find('a'):
-                infor['sender'] = info_continer[3].find('td').find('a').getText().replace('[','').replace(']','')
+                infor['sender'] = info_continer[3].find('td').find('a')['href'].split('/')[-1].strip()
             else:
                 infor['sender'] = info_continer[3].find('td').getText().replace('[','').replace(']','')
             txt = info_continer[4].find('td').getText()
@@ -338,19 +361,22 @@ class bitcoinUserConnectionAnalyzer:
 
             oput_infor = {
                 'address':None,
-                'reciever':None,
+                'receiver':None,
                 'value':None,
                 'spent':True 
             }
             tds = outp.findAll('td')
             try:oput_infor['address'] = tds[0].find('a').getText()
             except: oput_infor['address'] = re.findall('\d*.\s?(\D*)', tds[0].getText())[0] 
-            try:oput_infor['reciever'] = tds[1].find('a').getText().replace('[','').replace(']','')
-            except:oput_infor['reciever'] = tds[1].getText().replace('[','').replace(']','')
+            try:oput_infor['receiver'] = tds[1].find('a')['href'].split('/')[-1].strip()
+            except:oput_infor['receiver'] = tds[1].getText().replace('[','').replace(']','')
             oput_infor['value'] = re.findall('(\S*)\s*?B',tds[2].getText())[0]
             if tds[3].getText() == 'unspent':
                 oput_infor['spent'] = False
             #print(oput_infor)
+            
+            if oput_infor['receiver'] == '(change address)': oput_infor['receiver'] = infor['sender']
+            
             infor['outputs'].append(oput_infor)
 
             #db.updateMany('txid',txid, infor)
@@ -383,8 +409,10 @@ class bitcoinUserConnectionAnalyzer:
         |    txid: str
         |        다음 트랜잭션 ID
         """
+        print('=== getNextTxid START!!! ===')
         url = f'https://www.walletexplorer.com/address/{address}'
         soup = self.getSoup(url)
+        print('[ * ] nextTxid req -> ',url)
 
         timeLimitOver = False
 
@@ -399,7 +427,8 @@ class bitcoinUserConnectionAnalyzer:
         for page in range(1, lastPage+1):
             url = f'https://www.walletexplorer.com/address/{address}?page={page}'
             soup = b.getSoup(url)
-
+            print('[ * ] nextTxid req -> ',url)
+            
             # 페이지에 나타나는 테이블의 첫번째 줄은 인덱스이므로 필요 없음
             for each in soup.find('table',{'class':'txs'}).findAll('tr')[1:]:
                 infor = {'time':datetime.datetime.strptime(each.find('td',{'class':'date'}).text, '%Y-%m-%d %H:%M:%S'),
@@ -425,7 +454,7 @@ class bitcoinUserConnectionAnalyzer:
 
         # 트랜잭션 모음 살펴보면서 주소와 코인 값이 같은 트랜잭션 확인
         for each in txList:
-            txInfo = getTxInfo(each['txid'])
+            txInfo = self.getTxInfo(each['txid'])
             for eachInputs in txInfo['inputs']:
                 # 송금한 내역이고 살펴 보는 트랜잭션에서 받은 value 와 동일한 value 가 사용되면 이게 다음 트랜잭션임
                 if each['received'] == False and eachInputs['address'] == address and eachInputs['value'] == value:
@@ -434,12 +463,12 @@ class bitcoinUserConnectionAnalyzer:
         # 사용된 이력이 없으면 None 임    
         return None
     
-    def getStartPage(self, address, time):
+    def getStartPageOfAddress(self, address, time):
         """
         | 이진 탐색으로 time이 시작되는 페이지 찾기
         """
         url = f'https://www.walletexplorer.com/address/{address}'
-        soup = b.getSoup(url)
+        soup = self.getSoup(url)
 
         # address의 트랜잭션 마지막 페이지 번호 확인
         if len(soup.find('div',{'class':'paging'}).findAll('a')) == 3:
@@ -461,8 +490,8 @@ class bitcoinUserConnectionAnalyzer:
                 page = int((begin+end)/2)
 
                 url = f'https://www.walletexplorer.com/address/{address}?page={page}'
-                soup = b.getSoup(url)   
-                print('[ - ] req -> ', url)
+                soup = self.getSoup(url)   
+                print('[ * ] startPage req -> ', url)
 
                 time1 = datetime.datetime.strptime(soup.find('table',{'class':'txs'}).findAll('tr')[2].find('td',{'class':'date'}).text, '%Y-%m-%d %H:%M:%S')
                 time2 = datetime.datetime.strptime(soup.find('table',{'class':'txs'}).findAll('tr')[-1].find('td',{'class':'date'}).text, '%Y-%m-%d %H:%M:%S')
@@ -482,6 +511,63 @@ class bitcoinUserConnectionAnalyzer:
             return page
         # 첫번째 페이지가 time보다 이전인 경우 - 오류임. 
             return None
+        
+    def getStartPageOfUserID(self, userID, time):
+        """
+        | 이진 탐색으로 time이 시작되는 페이지 찾기
+        """
+        url = f'https://www.walletexplorer.com/wallet/{userID}'
+        soup = self.getSoup(url)
+
+        # address의 트랜잭션 마지막 페이지 번호 확인
+        if len(soup.find('div',{'class':'paging'}).findAll('a')) == 3:
+            lastPage = int(soup.find('div',{'class':'paging'}).findAll('a')[2]['href'].split('page=')[-1])
+        else:
+            lastPage = 1
+
+
+        time1 = datetime.datetime.strptime(soup.find('table',{'class':'txs'}).findAll('tr')[1].find('td',{'class':'date'}).text, '%Y-%m-%d %H:%M:%S')
+        try:
+            time2 = datetime.datetime.strptime(soup.find('table',{'class':'txs'}).findAll('tr')[-2].find('td',{'class':'date'}).text, '%Y-%m-%d %H:%M:%S')
+        except:
+            time2 = datetime.datetime.strptime(soup.find('table',{'class':'txs'}).findAll('tr')[-3].find('td',{'class':'date'}).text, '%Y-%m-%d %H:%M:%S')
+
+        # 첫번째 페이지가 해당 페이지인 경우
+        if time2<time and time1>=time:
+            return 1
+        # 첫번째 페이지가 time 보다 이후 인 경우
+        elif time2 > time:    
+            begin = 1
+            end = lastPage
+            while 1:
+                page = int((begin+end)/2)
+
+                url = f'https://www.walletexplorer.com/wallet/{userID}?page={page}'
+                soup = self.getSoup(url)   
+                print('[ * ] startPage req -> ', url)
+
+                time1 = datetime.datetime.strptime(soup.find('table',{'class':'txs'}).findAll('tr')[1].find('td',{'class':'date'}).text, '%Y-%m-%d %H:%M:%S')
+                try:
+                    time2 = datetime.datetime.strptime(soup.find('table',{'class':'txs'}).findAll('tr')[-2].find('td',{'class':'date'}).text, '%Y-%m-%d %H:%M:%S')
+                except:
+                    time2 = datetime.datetime.strptime(soup.find('table',{'class':'txs'}).findAll('tr')[-3].find('td',{'class':'date'}).text, '%Y-%m-%d %H:%M:%S')
+
+                # 해당 페이지를 찾은것임
+                if time2<=time and time1>=time:
+                    break
+                # 살펴본 페이지 날짜가 찾는 날짜보다 이후라면 2등분에서 오른쪽 
+                elif time2 > time:
+                    begin = page+1
+                # 살펴본 페이지 날짜가 찾는 날짜보다 이전이라면 2등분에서 왼쪽
+                elif time1 < time:
+                    end = page-1
+                else:
+                    if page == lastPage: page = page-1
+                    else: page = page+1
+            return page
+        # 첫번째 페이지가 time보다 이전인 경우 - 오류임. 
+            return None        
+
         
     def getNextTxid_binarySearch(self, address, time, value):
         """
@@ -509,8 +595,10 @@ class bitcoinUserConnectionAnalyzer:
         |    txid: str
         |        다음 트랜잭션 ID
         """
+        print('=== getNextTxid_binarySearch START!!! ===')
         url = f'https://www.walletexplorer.com/address/{address}'
         soup = self.getSoup(url)
+        print('[ * ] nextTxid req -> ', url)
 
         timeLimitOver = False
 
@@ -520,17 +608,18 @@ class bitcoinUserConnectionAnalyzer:
         else:
             lastPage = 1
 
-        startPage = self.getStartPage(address, time)
+        startPage = self.getStartPageOfAddress(address, time)
 
         # 페이지 순서대로 입력으로 들어온 time 보다 이후에 일어난 트랜잭션 txList에 수집
         txList=[]
         for page in range(startPage, 0, -1):
             url = f'https://www.walletexplorer.com/address/{address}?page={page}'
             soup = self.getSoup(url)
-            print('[ - ] req -> ',url)
+            print('[ * ] nextTxid req -> ',url)
 
             # 페이지에 나타나는 테이블의 첫번째 줄은 인덱스이므로 필요 없음
-            for each in soup.find('table',{'class':'txs'}).findAll('tr')[1:]:
+            # 테이블의 아래있는 데이터일수록 오래된 데이터이므로 아래에서부터 위로 올라가면서 확인해야함. 
+            for each in soup.find('table',{'class':'txs'}).findAll('tr')[:0:-1]:
                 infor = {'time':datetime.datetime.strptime(each.find('td',{'class':'date'}).text, '%Y-%m-%d %H:%M:%S'),
                          'value':each.find('td',{'class':'amount'}).text.strip(),
                          'received':True,
@@ -539,26 +628,176 @@ class bitcoinUserConnectionAnalyzer:
                 if infor['value'].startswith('-'):
                     infor['received'] = False
                 infor['value'] = float(infor['value'][1:])
-
+                
                 # 살펴보는 트랜잭션 시간 이전이면 상관없음
                 if infor['time'] < time:
-                    timeLimitOver = True
-                    break
+                    continue
+                    
+                txInfo = self.getTxInfo(infor['txid'])
+                for eachInputs in txInfo['inputs']:
+                    # 송금한 내역이고 살펴 보는 트랜잭션에서 받은 value 와 동일한 value 가 사용되면 이게 다음 트랜잭션임
+                    if infor['received'] == False and eachInputs['address'] == address and eachInputs['value'] == value:
+                        return infor['txid']                    
+                
                 txList.append(infor)
 
             # 살펴보는 트랜잭션 시간 이전이 확인되면 다음 페이지를 살펴볼 필요 없음
             if timeLimitOver: break
 
-        # 트랜잭션 모음 살펴보면서 주소와 코인 값이 같은 트랜잭션 확인
-        for each in txList:
-            txInfo = getTxInfo(each['txid'])
-            for eachInputs in txInfo['inputs']:
-                # 송금한 내역이고 살펴 보는 트랜잭션에서 받은 value 와 동일한 value 가 사용되면 이게 다음 트랜잭션임
-                if each['received'] == False and eachInputs['address'] == address and eachInputs['value'] == value:
-                    return each['txid']
-
         # 사용된 이력이 없으면 None 임    
         return None
+    
+    def generateChain(self, txid, level, DEPTH, chain):
+        """
+        | (재귀적 방법사용)
+        |
+        | 거래소의 출금 주소까지 연결되는 체인 생성
+        | 거래소의 출금 주소가 나오지 않으면 사용자가 설정한 DEPTH 까지만 체인 생성함.  
+        | 
+        | Parameter
+        |    txid: str
+        |        확인할 트랜잭션 ID
+        |    level: int
+        |        현재 확인하는 트랜잭션과 root와의 거리
+        |    DEPTH: int
+        |        사용자가 지정하는 최대 level(거래소 출금 주소가 안나오는 경우를 대비)
+        |    chain: list
+        |        결과 체인이 담길 리스트
+        | Return
+        |    chain: list
+        |        거래소 입금주소에서 거래소 출금주소까지의 연결 체인
+        |        각 체인 블록의 내용 = {'level': 해당 블록과 root까지의 거리
+        |                               'userID': 해당 블록의 전송되는 코인의 소유자
+        |                               'nextUserID': 해당 블록에서 코인을 전송 받은 소유자
+        |                               'txid': 해당 블록의 전송 내용이 담긴 트랜잭션 ID
+        |                               'nextTxid': 해당 블록에서 코인을 전송 받은 소유자가 코인을 사용한 트랜잭션 ID
+        |                               }
+        """
+        # DEPTH 제한에 넘어가면 체인 그만 연결.
+        if level == DEPTH+1:
+            return chain
+        # DEPTH 제한 안에 들어오면 지금의 트랜잭션에서 output으로 나가는 내용 확인
+        else:
+            txInfo = self.getTxInfo(txid)
+            for output in txInfo['outputs']:
+                print(output)
+                chainBlock = {'chainID': 'C'+str(self.chaindb.collection.count_documents({})),
+                              'level':level,
+                              'userID':txInfo['sender'],
+                              'nextUserID':output['receiver'],
+                              'txid':txid,
+                              'nextTxid': None,
+                              'txidInfo':txInfo
+                             }
+                # 만약 다음 사용한 트랜잭션이 있다면
+                if output['spent']: 
+                    chainBlock['nextTxid'] = self.getNextTxid_binarySearch(output['address'], txInfo['time'], output['value'])
+
+                chain.append(chainBlock)
+
+                # 같은 level에 해당되는 txid와 output은 중복으로 안넣어도 됨.
+                if self.chaindb.collection.count_documents({'level':chainBlock['level'], 'txid':chainBlock['txid'], 'nextUserID':chainBlock['nextUserID'], 'nextTxid':chainBlock['nextTxid']}) == 0:
+                    # db에 넣는게 나중에 chain에서 userID를 뽑아서 연결 관계를 볼때 편리할 듯 
+                    self.chaindb.insertOne(chainBlock)
+
+                # 다음 트랜잭션이 없거나 거래소 출금주소이면 체인 그만 생성
+                if chainBlock['nextTxid'] == None or output['receiver'] == '9881d29b43a73482': 
+                    continue
+                # 그게 아니면 다음 트랜잭션 확인
+                else:
+                    chain = self.generateChain(chainBlock['nextTxid'], level+1, DEPTH, chain)
+            return chain
+        
+    def generateUserChain(self, exchangeInUserID = '00001daa90d8b9ec', DEPTH=2):
+        """
+        | 거래소 입금 주소 -> 거래소 출금 주소 까지의 체인 생성
+        |
+        | Parameter
+        |    exchangeInUserID: str
+        |        거래소 입금 주소
+        |    DEPTH: int
+        |        체인 생성 시 제한 둘 level 크기
+        | Return
+        |    CHAIN: list
+        |        거래소 입금 주소와 출금 주소간의 연결 체인 생성
+        """
+        CHAIN = {'rootUserID': exchangeInUserID,
+                 'chains':[]
+                }
+        
+        userList = self.getReceivedUserIDs(exchangeInUserID)
+        for user in userList:
+            print('[ - ] receiverID = ', user)
+            txList = self.getTxList(exchangeInUserID, user)
+            print('[ - ] txList len = ', len(txList))
+            for txid in txList:
+                chain = self.generateChain(txid, 1, DEPTH, [])
+                CHAIN['chains'].append(chain)
+
+        return CHAIN
+    
+    def extractUserChain(self, exchangeOutUserID='9881d29b43a73482'):
+        """
+        | 거래소 입금 주소에서 거래소 출금 주소까지 코인이 흘러가는 동안 거쳐간 소유자 ID 추출
+        |
+        | Parameter
+        |    exchangeOutUserID: str
+        |        거래소 출금 주소 
+        | Return
+        |    userIDChain: list
+        |        소유자 연결 정보
+        |    userChain: list
+        |        소유자 연결 정보 w/ 트랜잭션 정보
+        """
+        info = {'userID':None,
+                'txid':None,
+                'txidInfo':None
+               }
+        userChain = []
+        userIDChain = []
+        # 거래소 출금 주소까지 연결 된 체인만 DB에서 추출
+        for each in self.chaindb.find('nextUserID','9881d29b43a73482'):
+            userIDs = []
+            userIDInfo = []
+            i = info.copy()
+            i['userID'] = each['nextUserID']
+            i['txid'] = each['nextTxid']
+            userIDs.append(each['nextUserID'])
+            userIDInfo.append(i)
+            i = info.copy()
+            i['userID'] = each['userID']
+            i['txid'] = each['txid']
+            #i['txidInfo'] = each['txidInfo']
+            userIDs.append(each['userID'])
+            userIDInfo.append(i)
+            print(each['level'])
+            print(each['userID'])
+
+            level = each['level']
+            txid = each['txid']
+            # 거래소 출금 주소의 level에서 거래소 입금 주소의 level인 1까지의 소유자 체인 생성
+            while(level > 1):
+                # 전에 확인했던 level의 앞에 있는 level을 확인하면 됨. 
+                # 앞에 있는 level과 연결된 txid가 전에 확인했던 txid이면 두개가 연결된 체인임. 중복이 방지되도록 db에 들어가니 결과가 1개일것임.
+                item = list(self.chaindb.collection.find({'level':each['level']-1, 'nextTxid':txid}))[0]
+                i = info.copy()
+                i['userID'] = each['userID']
+                i['txid'] = each['txid']
+                #i['txidInfo'] = each['txidInfo']
+                userIDs.append(each['userID'])
+                userIDInfo.append(i)
+                print(item['level'])
+                print(item['userID'])
+                level = item['level']
+                txid = item['txid']
+
+            # 출금 주소 부터 리스트에 들어가니 reverse 해서 입금주소부터 나오도록함
+            userIDs.reverse()
+            userIDChain.append(userIDs)
+            userIDInfo.reverse()
+            userChain.append(userIDInfo)    
+
+        return userIDChain, userChain
 
 if __name__ =="__main__":
     b = bitcoinUserConnectionAnalyzer()
@@ -572,16 +811,6 @@ if __name__ =="__main__":
     # 날짜 필터링 사용
     b.getUserTx('00001daa90d8b9ec',datetime.datetime(2020,1,1),datetime.datetime(2020,6,15,23,59,59))
 
-    receivers = b.getReceivedUserIDs('00001daa90d8b9ec')
-
-    for eachReceiver in receivers:  
-        txidList = getTxList(userID, eachReceiver)
-        for eachTxid in txidList:
-            print('====')
-            print(eachTxid)
-            infor = getTxInfo(eachTxid)
-            for each in infor['outputs']:
-                print('----')
-                print(each['address'])
-                nextTxid = getNextTxid(each['address'], infor['time'], each['value'])
-                print(nextTxid)
+    b.setChainDB('00001daa90d8b9ec')
+    b.generateUserChain(exchangeInUserID='00001daa90d8b9ec', DEPTH=2)
+    userIDChain, userChain = b.extractUserChain(exchangeOutUserID='9881d29b43a73482')
