@@ -781,10 +781,10 @@ class bitcoinUserConnectionAnalyzer:
                 # 앞에 있는 level과 연결된 txid가 전에 확인했던 txid이면 두개가 연결된 체인임. 중복이 방지되도록 db에 들어가니 결과가 1개일것임.
                 item = list(self.chaindb.collection.find({'level':each['level']-1, 'nextTxid':txid}))[0]
                 i = info.copy()
-                i['userID'] = each['userID']
-                i['txid'] = each['txid']
+                i['userID'] = item['userID']
+                i['txid'] = item['txid']
                 #i['txidInfo'] = each['txidInfo']
-                userIDs.append(each['userID'])
+                userIDs.append(item['userID'])
                 userIDInfo.append(i)
                 print(item['level'])
                 print(item['userID'])
