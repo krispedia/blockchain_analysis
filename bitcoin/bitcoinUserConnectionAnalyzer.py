@@ -146,9 +146,6 @@ class bitcoinUserConnectionAnalyzer:
 
         return lastPage
     
-    # To. 20200616의 나에게
-    # db 넣는 조건 변경할것!!!  -> 변경했음 
-    # userID 길이 통일해야함. 링크에 있는 URL 에서 user ID 가져오도록 변경할 -> 변경함
     def getUserTx(self, userID, fromTime=None, toTime=None):
         """
         | user 트랜잭션 데이터 가져오기
