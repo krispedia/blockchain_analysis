@@ -20,7 +20,13 @@ class ethereumAnalyzer:
         
     def formTime(self, timeString):
         """
-         시간 포맷 맞춰주기
+        | 시간 포맷 맞춰주기
+        |
+        | Parameter
+        |    timeString: str
+        |        시간 스트링
+        | Retrun
+        |    time:datetime
         """
         # May-25-2020 05:54:26 AM
         monthString = timeString.split('-')[0]
@@ -49,9 +55,22 @@ class ethereumAnalyzer:
     
     def generateTimeTermByDay(self, targetTime, termDays):
         """
-         확인할 시간 텀 생성 
-         
-         ex) 2020.01.01 ~ 2020.01.13
+        | 확인할 시간 텀 생성 
+        | 
+        | 시간 조건을 걸어 확인할 날짜를 지정할 수 있도록 하기위해 생성
+        | 
+        | ex) 2020.01.01 ~ 2020.01.13
+        |
+        | Parameter
+        |    targetTime: datetime
+        |        기간의 중심이 되는 날짜
+        |    termDays: int
+        |        중심 날짜에서 앞뒤로 며칠을 살펴볼 것인가
+        | Return
+        |    beforeDate: datetime
+        |        시작 날짜
+        |    afterDate: datetime
+        |        끝 날짜
         """
         
         return targetTime - datetime.timedelta(days=termDays), targetTime + datetime.timedelta(days=termDays+1)
@@ -60,7 +79,16 @@ class ethereumAnalyzer:
     
     def getTxInfoByTxid(self, txid):  
         """
-         트랜잭션 정보 가져오기
+        | 트랜잭션 정보 가져오기
+        |  
+        | 테이블의 한 행씩 가져옴.
+        |
+        | Parameter
+        |    txid: str
+        |        확인할 트랜잭션 해쉬
+        | Return
+        |    infor: dict
+        |        해당 트랜잭션 정보
         """
         url = f'https://etherscan.io/tx/{txid}'
         self.driver.get(url)
@@ -92,6 +120,7 @@ class ethereumAnalyzer:
                  'inputData':None
                 }
 
+        # 한 행씩 살펴봄
         for each in soup.find('div',{'id':'ContentPlaceHolder1_maintable'}).findAll('div',{'class':'row'}):
             data = each.text.replace('\n','').split(':')
             #print(data)
@@ -112,6 +141,7 @@ class ethereumAnalyzer:
                         infor['fromAddress'] = data[1].strip()
 
                 elif data[0].startswith('To'):
+                    
                     # contract를 통한 거래인 경우
                     if data[1].strip().startswith('Contract'):
                         # contract 데이터 추가
@@ -177,7 +207,18 @@ class ethereumAnalyzer:
 
     def getNormalTransactionByAddress(self, addr, targetTime, termDays):
         """
-         address 해당 normal transaction 찾기
+        | address 해당 normal transaction 찾기
+        |
+        | Parameter
+        |    addr: str
+        |        살펴 볼 주소
+        |    targetTime: datetime
+        |        살펴볼 중심이 되는 날짜
+        |    termDays: int
+        |        중심 날짜에서 앞뒤로 며칠을 살펴볼것인가
+        | Return
+        |    res: list
+        |        일반 트랜잭션 정보가 담긴 리스트
         """
         prevTimeLimit, nextTimeLimit = self.generateTimeTermByDay(targetTime, termDays)
         print('[ - ] ', prevTimeLimit)
@@ -239,14 +280,36 @@ class ethereumAnalyzer:
     
     def getBlockTimeByParentTxid(self, parentTxid):
         """
-         Internal transaction 시간 가져오기 
+        | Internal transaction 시간 가져오기
+        | 내부 트랜잭션 기록에 시간이 안적혀 있는경우가 있음. 
+        | 이때 이 함수를 사용
+        |
+        | Parameter
+        |    parentTxid: str
+        |        내부 트랜잭션을 발생 시키는 일반 트랜잭션의 ID
+        | Return
+        |    block: int
+        |        트랜잭션이 기록되어있는 블록 번호
+        |    time: datetime
+        |        트랜잭션일 발생한 시간
         """
         info = self.getTxInfoByTxid(parentTxid)
         return info['block'], info['time']
     
     def getInternalTransactionByAddress(self, addr, targetTime, termDays):
         """
-         address로 transaction Internal 찾기
+        | address 해당 transaction Internal 찾기
+        |
+        | Parameter
+        |    addr: str
+        |        살펴볼 주소
+        |    targetTime: datetime
+        |        살펴볼 중심이 되는 날짜
+        |    termDays: int
+        |        중심 날짜에서 앞뒤로 며칠을 살펴볼것인가
+        | Return
+        |    res: list
+        |        내부 트랜잭션 정보가 담긴 리스트
         """
         prevTimeLimit, nextTimeLimit = self.generateTimeTermByDay(targetTime, termDays)
         print('[ - ] ', prevTimeLimit)
@@ -347,7 +410,14 @@ class ethereumAnalyzer:
     
     def getAddressInfo(self, address):
         """
-         주소 정보 확인
+        | 주소 정보 확인
+        |
+        | Parameter
+        |    address: str
+        |        살펴 볼 주소
+        | Return 
+        |    infor: list
+        |        해당 주소의 정보
         """
         url = f'https://etherscan.io/address/{address}'
         self.driver.get(url)
@@ -401,7 +471,16 @@ class ethereumAnalyzer:
 
     def getContractOwnerAddressByContractAddress(self, contractAddr, APIKEY):
         """
-         contract 생성자 주소 확인
+        | contract 생성자 주소 확인
+        |
+        | Parameter
+        |    contractAddr: str
+        |        contract 주소
+        |    APIKEY: str
+        |        ethplorer.io 사이트에서 발급해주는 APIKEY
+        | Return
+        |    creatorAddress: str
+        |        contranct를 생성한 지갑 주소
         """
         url = f'http://api.ethplorer.io/getAddressInfo/{contractAddr}?apiKey={APIKEY}'
         req = requests.get(url)
